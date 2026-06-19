@@ -1,50 +1,26 @@
-@st.cache_data(ttl=300)
-def safe_get_stock_data():
-    import requests
+import streamlit as st
 
-    # =====================
-    # ① AKShare主数据
-    # =====================
-    try:
-        df = ak.stock_zh_a_spot_em()
+from data.data_loader import load_data
+from strategy.multi_factor_v3 import score_stocks
+from backtest.engine_v3 import backtest
 
-        if df is not None and len(df) > 0:
-            return df
+st.set_page_config(page_title="量化V3系统", layout="wide")
 
-    except Exception as e:
-        st.warning(f"主数据失败：{e}")
+st.title("🚀 A股量化选股系统 V3（专业版）")
 
-    # =====================
-    # ② TuShare兜底（关键修复）
-    # =====================
-    try:
-        import tushare as ts
+st.markdown("系统状态：🟢 正常运行")
 
-        pro = ts.pro_api("你的token")
+if st.button("🔥 开始全市场选股"):
 
-        df = pro.stock_basic(
-            exchange='',
-            list_status='L',
-            fields='ts_code,name,industry'
-        )
+    df = load_data()
 
-        if df is not None and len(df) > 0:
-            df["涨跌幅"] = np.random.uniform(-3, 3, len(df))
-            df["评分"] = np.random.randint(60, 100, len(df))
-            return df
+    result = score_stocks(df)
 
-    except Exception as e:
-        st.warning(f"TuShare失败：{e}")
+    st.subheader("📊 股票池（排序后）")
+    st.dataframe(result, use_container_width=True)
 
-    # =====================
-    # ③ 最终兜底（永不崩）
-    # =====================
-    st.error("⚠️ 所有数据源失败，启用本地模拟数据")
+    st.subheader("🔥 Top10股票")
+    st.bar_chart(result.head(10).set_index("名称")["score"])
 
-    return pd.DataFrame({
-        "ts_code": ["000001.SZ", "600000.SH", "600519.SH", "000858.SZ", "002415.SZ"],
-        "name": ["平安银行", "浦发银行", "贵州茅台", "五粮液", "海康威视"],
-        "industry": ["银行", "银行", "白酒", "白酒", "安防"],
-        "涨跌幅": [1.2, -0.8, 2.3, 1.5, -0.3],
-        "评分": [85, 80, 95, 90, 88]
-    })
+    st.subheader("📈 回测结果")
+    st.json(backtest(result))
