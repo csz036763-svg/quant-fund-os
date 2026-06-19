@@ -3,66 +3,47 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Multi-Asset Quant Fund", layout="centered")
+st.title("🏦 Institutional Multi-Asset Fund (NAV Model)")
 
-st.title("🏦 Multi-Stock Quant Fund System")
-
-# ======================
-# 股票池
-# ======================
 symbols = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
 
-st.write("📊 Portfolio Assets:", symbols)
+weights = np.array([0.2]*len(symbols))
+
+price_data = pd.DataFrame()
 
 # ======================
-# 权重（等权）
+# 下载数据
 # ======================
-weight = 1 / len(symbols)
-
-# ======================
-# 组合收益
-# ======================
-portfolio_returns = None
-
-for symbol in symbols:
-
-    data = yf.download(symbol, period="6mo", interval="1d")
-
-    if data.empty:
-        continue
-
-    df = pd.DataFrame()
-    df["Close"] = data["Close"]
-
-    # ===== 策略 =====
-    df["MA5"] = df["Close"].rolling(5).mean()
-    df["MA20"] = df["Close"].rolling(20).mean()
-
-    df["Signal"] = 0
-    df.loc[df["MA5"] > df["MA20"], "Signal"] = 1
-
-    df["Return"] = df["Close"].pct_change()
-    df["Strategy_Return"] = df["Return"] * df["Signal"].shift(1)
-
-    if portfolio_returns is None:
-        portfolio_returns = df["Strategy_Return"] * weight
-    else:
-        portfolio_returns = portfolio_returns.add(df["Strategy_Return"] * weight, fill_value=0)
+for s in symbols:
+    df = yf.download(s, period="6mo")["Close"]
+    price_data[s] = df
 
 # ======================
-# 累计收益
+# 处理缺失值
 # ======================
-portfolio_returns = portfolio_returns.fillna(0)
+price_data = price_data.dropna()
 
-cumulative = (1 + portfolio_returns).cumprod()
+# ======================
+# 收益率
+# ======================
+returns = price_data.pct_change().dropna()
+
+# ======================
+# 组合收益（真实基金算法）
+# ======================
+portfolio_return = returns.dot(weights)
+
+# ======================
+# NAV曲线
+# ======================
+nav = (1 + portfolio_return).cumprod()
 
 # ======================
 # 展示
 # ======================
-st.metric("Portfolio Latest Value", f"{cumulative.iloc[-1]:.2f}")
+st.write("📊 Assets:", symbols)
 
-st.subheader("📈 Portfolio Growth Curve")
-st.line_chart(cumulative)
+st.metric("Fund NAV", f"{nav.iloc[-1]:.2f}")
 
-st.subheader("📊 Strategy Info")
-st.write("Equal-weight MA strategy portfolio")
+st.line_chart(nav)
+   
