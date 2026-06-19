@@ -1,4 +1,7 @@
 streamlit
-tushare
 pandas
 numpy
+requests
+tqdm
+akshare
+tushare
