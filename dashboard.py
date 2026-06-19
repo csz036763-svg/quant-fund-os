@@ -1,104 +1,61 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import tushare as ts
-import akshare as ak
-import os
-import json
+import pandas as pd
 
-# ======================
-# TOKEN 设置
-# ======================
-TUSHARE_TOKEN = "你的token"
+# ========== 配置 ==========
+TOKEN = "46cd2dce6fce352638b4896a90e61a1d7cb69cfe9c63bb90ed823b08"
 
-def init_tushare():
+st.set_page_config(page_title="A股量化选股系统（稳定版）", layout="wide")
+
+st.title("📊 A股量化选股系统（稳定版）")
+
+# ========== 初始化 ==========
+@st.cache_data(show_spinner=False)
+def init_pro():
     try:
-        ts.set_token(TUSHARE_TOKEN)
+        ts.set_token(TOKEN)
         pro = ts.pro_api()
         return pro
-    except:
+    except Exception as e:
+        st.error(f"Tushare初始化失败：{e}")
         return None
 
-pro = init_tushare()
 
-# ======================
-# A股股票池（稳定获取）
-# ======================
-@st.cache_data(ttl=3600)
-def get_stock_pool():
-    data = None
+# ========== 拉取股票 ==========
+@st.cache_data(show_spinner=True)
+def get_stock_list():
+    pro = init_pro()
+    if pro is None:
+        return None, "初始化失败"
 
-    # ========== 1️⃣ Tushare ==========
-    if pro:
-        try:
-            data = pro.stock_basic(
-                exchange='',
-                list_status='L',
-                fields='ts_code,name,industry'
-            )
-        except:
-            data = None
+    try:
+        df = pro.stock_basic(exchange='', list_status='L',
+                             fields='ts_code,name,industry')
 
-    # ========== 2️⃣ AKShare ==========
-    if data is None or len(data) == 0:
-        try:
-            data = ak.stock_info_a_code_name()
-            data.columns = ["ts_code", "name"]
-        except:
-            data = None
+        if df is None or len(df) == 0:
+            return None, "Tushare返回空数据（token权限/网络问题）"
 
-    # ========== 3️⃣ 本地兜底 ==========
-    if data is None or len(data) == 0:
-        if os.path.exists("cache_stocks.csv"):
-            data = pd.read_csv("cache_stocks.csv")
+        return df, "OK"
 
-    # ========== 缓存 ==========
-    if data is not None and len(data) > 0:
-        data.to_csv("cache_stocks.csv", index=False)
+    except Exception as e:
+        return None, str(e)
 
-    return data
 
-# ======================
-# 简单量化评分模型
-# ======================
-def score_stock(df):
-    if df is None or len(df) == 0:
-        return df
+# ========== UI ==========
+if st.button("🚀 开始A股选股（稳定版）"):
 
-    df = df.copy()
-    np.random.seed(42)
+    df, msg = get_stock_list()
 
-    df["momentum_score"] = np.random.rand(len(df)) * 100
-    df["quality_score"] = np.random.rand(len(df)) * 100
-    df["value_score"] = np.random.rand(len(df)) * 100
+    if df is None:
+        st.error(f"❌ 数据获取失败：{msg}")
+        st.stop()
 
-    df["total_score"] = (
-        df["momentum_score"] * 0.4 +
-        df["quality_score"] * 0.3 +
-        df["value_score"] * 0.3
-    )
+    st.success(f"✅ 成功获取股票数量：{len(df)}")
 
-    return df.sort_values("total_score", ascending=False)
+    st.dataframe(df.head(20))
 
-# ======================
-# UI
-# ======================
-st.title("📊 A股量化选股系统（稳定生产版）")
+    # 简单筛选示例（稳定不会崩）
+    st.subheader("🔥 示例筛选：非空行业股票")
 
-if st.button("🚀 开始选股"):
-    with st.spinner("正在获取A股数据..."):
-
-        stocks = get_stock_pool()
-
-        if stocks is None or len(stocks) == 0:
-            st.error("❌ 股票池为空：请检查 Tushare token 或网络")
-        else:
-            st.success(f"✔ 股票数量: {len(stocks)}")
-
-            result = score_stock(stocks)
-
-            st.subheader("🏆 Top 20 选股结果")
-            st.dataframe(result.head(20))
-
-            st.subheader("📈 Top 20 得分")
-            st.bar_chart(result.head(20).set_index("name")["total_score"])
+    filtered = df.dropna(subset=["industry"])
+    st.dataframe(filtered.head(20))
