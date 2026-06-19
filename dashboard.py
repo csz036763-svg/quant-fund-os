@@ -1,133 +1,95 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import plotly.graph_objects as go
 
 st.set_page_config(page_title="量化选股系统 V3", layout="wide")
 
 st.title("📊 A股 / 美股 专业量化选股系统 V3")
 
-# =========================
-# 输入
-# =========================
-symbol = st.text_input("输入股票代码（AAPL / TSLA / 000001.SS）", "AAPL")
+# ======================
+# 股票池（你可以扩展）
+# ======================
+stock_pool = [
+    "AAPL", "MSFT", "TSLA", "NVDA",
+    "000001.SS", "600519.SS", "000858.SS"
+]
 
-# =========================
-# 数据获取
-# =========================
+# ======================
+# 下载数据
+# ======================
 @st.cache_data
 def get_data(symbol):
-    try:
-        df = yf.download(symbol, period="1y")
-        return df
-    except:
-        return pd.DataFrame()
+    df = yf.download(symbol, period="1y")
+    return df
 
-df = get_data(symbol)
+# ======================
+# 单股评分函数
+# ======================
+def score_stock(df):
+    if df is None or df.empty:
+        return None
 
-# =========================
-# 数据检查（防崩关键）
-# =========================
-if df is None or df.empty:
-    st.error("❌ 数据获取失败：请检查股票代码或网络")
-    st.stop()
+    df["MA5"] = df["Close"].rolling(5).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
 
-# =========================
-# 技术指标
-# =========================
-df["MA5"] = df["Close"].rolling(5).mean()
-df["MA20"] = df["Close"].rolling(20).mean()
+    # RSI
+    delta = df["Close"].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
 
-# RSI
-delta = df["Close"].diff()
-gain = np.where(delta > 0, delta, 0)
-loss = np.where(delta < 0, -delta, 0)
+    gain = pd.Series(gain).rolling(14).mean()
+    loss = pd.Series(loss).rolling(14).mean()
 
-gain = pd.Series(gain).rolling(14).mean()
-loss = pd.Series(loss).rolling(14).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
 
-rs = gain / loss
-df["RSI"] = 100 - (100 / (1 + rs))
+    # MACD
+    ema12 = df["Close"].ewm(span=12).mean()
+    ema26 = df["Close"].ewm(span=26).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9).mean()
 
-# MACD
-ema12 = df["Close"].ewm(span=12).mean()
-ema26 = df["Close"].ewm(span=26).mean()
-df["MACD"] = ema12 - ema26
-df["Signal"] = df["MACD"].ewm(span=9).mean()
+    score = 50
 
-# =========================
-# 量化评分系统 V3
-# =========================
-score = 50
+    # 均线
+    if df["MA5"].iloc[-1] > df["MA20"].iloc[-1]:
+        score += 15
+    else:
+        score -= 10
 
-# 均线
-if df["MA5"].iloc[-1] > df["MA20"].iloc[-1]:
-    score += 15
-else:
-    score -= 10
+    # RSI
+    if rsi.iloc[-1] < 30:
+        score += 15
+    elif rsi.iloc[-1] > 70:
+        score -= 15
 
-# RSI
-if df["RSI"].iloc[-1] < 30:
-    score += 15
-elif df["RSI"].iloc[-1] > 70:
-    score -= 15
+    # MACD
+    if macd.iloc[-1] > signal.iloc[-1]:
+        score += 15
+    else:
+        score -= 5
 
-# MACD
-if df["MACD"].iloc[-1] > df["Signal"].iloc[-1]:
-    score += 15
-else:
-    score -= 5
+    return max(0, min(100, score))
 
-score = max(0, min(100, score))
+# ======================
+# 扫描股票池
+# ======================
+if st.button("🔥 开始全市场选股（V3）"):
 
-# =========================
-# 输出评分
-# =========================
-st.subheader("📌 量化评分")
-st.metric("综合评分", f"{score}/100")
+    result = []
 
-if score >= 75:
-    st.success("🟢 强烈关注 / 潜在买入")
-elif score >= 50:
-    st.warning("🟡 观望 / 震荡区间")
-else:
-    st.error("🔴 回避 / 风险较高")
+    for stock in stock_pool:
+        df = get_data(stock)
+        score = score_stock(df)
 
-# =========================
-# K线图
-# =========================
-fig = go.Figure()
+        if score is not None:
+            result.append([stock, score])
 
-fig.add_trace(go.Candlestick(
-    x=df.index,
-    open=df["Open"],
-    high=df["High"],
-    low=df["Low"],
-    close=df["Close"],
-    name="K线"
-))
+    result_df = pd.DataFrame(result, columns=["股票", "评分"])
+    result_df = result_df.sort_values("评分", ascending=False)
 
-fig.add_trace(go.Scatter(x=df.index, y=df["MA5"], name="MA5"))
-fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20"))
+    st.subheader("📊 选股结果排名")
+    st.dataframe(result_df)
 
-fig.update_layout(height=600, title="K线 + 均线系统")
-st.plotly_chart(fig, use_container_width=True)
-
-# =========================
-# RSI
-# =========================
-st.subheader("RSI指标")
-st.line_chart(df["RSI"])
-
-# =========================
-# MACD
-# =========================
-st.subheader("MACD指标")
-st.line_chart(df[["MACD", "Signal"]])
-
-# =========================
-# 数据表
-# =========================
-with st.expander("📊 查看原始数据"):
-    st.dataframe(df.tail(30))
+    st.bar_chart(result_df.set_index("股票"))
