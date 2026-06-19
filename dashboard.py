@@ -1,54 +1,58 @@
 import streamlit as st
+import akshare as ak
 import pandas as pd
 import numpy as np
-import akshare as ak
-import time
 
 # =========================
-# 页面标题
+# 页面设置
 # =========================
-st.title("📊 A股量化选股系统（稳定版）")
+st.set_page_config(page_title="A股量化选股系统", layout="wide")
 
-st.write("基于多因子模型的A股选股系统（云端稳定版）")
+st.title("📊 A股量化选股系统（稳定专业版）")
 
 # =========================
-# 1. 稳定获取股票列表（防崩核心）
+# 股票池（防崩版）
 # =========================
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_stock_list():
     try:
         df = ak.stock_info_a_code_name()
-        if df is None or len(df) == 0:
-            raise Exception("empty data")
-        return df
+        df = df.dropna()
+        return df["code"].tolist()
     except:
-        try:
-            df = ak.stock_info_sh_name_code("主板A股")
-            return df
-        except:
-            # 最终兜底（保证永不崩）
-            return pd.DataFrame({
-                "code": ["000001", "000002", "600000", "600036", "601318"],
-                "name": ["平安银行", "万科A", "浦发银行", "招商银行", "中国平安"]
-            })
+        return []
 
 # =========================
-# 2. 获取行情数据（防崩）
+# 数据获取（稳定核心）
 # =========================
-@st.cache_data(ttl=300)
 def get_stock_data(symbol):
     try:
-        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="qfq")
-        if df is None or len(df) < 30:
+        df = ak.stock_zh_a_hist(
+            symbol=symbol,
+            period="daily",
+            adjust="qfq"
+        )
+
+        if df is None or df.empty:
+            return None
+
+        df = df.rename(columns={
+            "收盘": "close",
+            "开盘": "open",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume"
+        })
+
+        if "close" not in df.columns:
             return None
 
         df = df.tail(60)
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna()
 
-        # 统一字段
-        df = df.rename(columns={
-            "收盘": "close",
-            "成交量": "volume"
-        })
+        if len(df) < 30:
+            return None
 
         return df
 
@@ -56,88 +60,73 @@ def get_stock_data(symbol):
         return None
 
 # =========================
-# 3. 因子评分模型
+# 因子模型（稳定版）
 # =========================
-def calculate_score(df):
+def score_stock(df):
     try:
-        df["ma5"] = df["close"].rolling(5).mean()
-        df["ma20"] = df["close"].rolling(20).mean()
+        close = df["close"]
 
-        # 动量
-        momentum = df["close"].iloc[-1] / df["close"].iloc[-20] - 1
+        momentum = close.iloc[-1] / close.iloc[0] - 1
+        ma20 = close.rolling(20).mean().iloc[-1]
+        ma_factor = close.iloc[-1] / ma20 - 1
+        volatility = close.pct_change().std()
 
-        # 趋势
-        trend = 1 if df["ma5"].iloc[-1] > df["ma20"].iloc[-1] else 0
-
-        # 量能
-        vol_ratio = df["volume"].iloc[-1] / df["volume"].mean()
-
-        # 综合评分
-        score = momentum * 0.6 + trend * 0.3 + vol_ratio * 0.1
-
+        score = 0.5 * momentum + 0.3 * ma_factor - 0.2 * volatility
         return score
 
     except:
         return None
 
 # =========================
-# 4. UI
+# 全市场选股（稳定版）
 # =========================
-stocks = get_stock_list()
+def run_screen(limit=20):
+    stocks = get_stock_list()
 
-st.write(f"📌 股票池数量：{len(stocks)}")
-
-# =========================
-# 5. 扫描按钮
-# =========================
-if st.button("🚀 开始A股选股（稳定版）"):
+    if not stocks:
+        return []
 
     results = []
 
-    # 🔥 限制数量防止云端崩
-    sample_size = min(80, len(stocks))
-    sample = stocks.sample(sample_size)
-
     progress = st.progress(0)
+    total = min(200, len(stocks))  # 防崩关键
 
-    for i, row in enumerate(sample.iterrows()):
-        try:
-            code = row[1]["code"] if "code" in stocks.columns else row[1][0]
-            name = row[1]["name"] if "name" in stocks.columns else "Unknown"
+    for i, code in enumerate(stocks[:total]):
+        df = get_stock_data(code)
 
-            df = get_stock_data(code)
-
-            if df is None:
-                continue
-
-            score = calculate_score(df)
-
-            if score is not None:
-                results.append({
-                    "code": code,
-                    "name": name,
-                    "score": round(score, 4)
-                })
-
-        except:
+        if df is None:
             continue
 
-        progress.progress((i + 1) / sample_size)
-        time.sleep(0.15)  # 防止被封 / 防止崩溃
+        score = score_stock(df)
 
-    # =========================
-    # 6. 输出结果
-    # =========================
-    if len(results) > 0:
+        if score is None:
+            continue
 
-        result_df = pd.DataFrame(results)
-        result_df = result_df.sort_values("score", ascending=False)
+        results.append((code, score))
 
-        st.subheader("🏆 Top 10 推荐股票")
-        st.dataframe(result_df.head(10))
+        progress.progress((i + 1) / total)
 
-        st.subheader("📊 全部评分结果")
-        st.dataframe(result_df)
+    results = sorted(results, key=lambda x: x[1], reverse=True)
 
-    else:
-        st.warning("暂无有效数据，请稍后重试")
+    return results[:limit]
+
+# =========================
+# UI
+# =========================
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🚀 开始A股选股（稳定版）"):
+        with st.spinner("正在扫描A股市场..."):
+            results = run_screen()
+
+        if not results:
+            st.warning("暂无有效数据（可能是网络限制或AKShare接口波动）")
+        else:
+            st.success("选股完成！")
+
+            df_show = pd.DataFrame(results, columns=["股票代码", "评分"])
+            st.dataframe(df_show, use_container_width=True)
+
+with col2:
+    st.info("📌 系统说明：\n- 使用AKShare\n- 多因子评分模型\n- 自动过滤无效数据\n- 限制200只股票防止崩溃")
