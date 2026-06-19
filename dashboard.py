@@ -2,35 +2,29 @@ import streamlit as st
 import tushare as ts
 import pandas as pd
 
-# =========================
-# 🔧 基础配置
-# =========================
-st.set_page_config(page_title="A股量化选股系统（稳定版）", layout="wide")
+st.set_page_config(page_title="A股量化系统（调试版）", layout="wide")
 
-st.title("📊 A股量化选股系统（稳定生产版）")
+st.title("📊 A股量化选股系统（DEBUG稳定版）")
 
-# ⚠️ 你的 token（已强制写入）
+# =========================
+# ⚠️ TOKEN
+# =========================
 TOKEN = "46cd2dce6fce352638b4896a90e61a1d7cb69c63bb90ed823b08"
 
-# =========================
-# 🚀 初始化Tushare（关键修复）
-# =========================
-try:
-    pro = ts.pro_api(TOKEN)
-except Exception as e:
-    st.error(f"Tushare初始化失败：{e}")
-    st.stop()
+ts.set_token(TOKEN)
+pro = ts.pro_api()
 
 # =========================
-# 🛡️ 安全调用函数（防崩）
+# 🔍 强制测试API连接（关键）
 # =========================
-def safe_call(func, **kwargs):
+def test_connection():
     try:
-        df = func(**kwargs)
-        if df is None or len(df) == 0:
-            return pd.DataFrame()
+        df = pro.stock_basic(exchange='', list_status='L')
+        st.write("DEBUG：stock_basic返回行数 =", len(df))
         return df
-    except Exception:
+    except Exception as e:
+        st.error("❌ Tushare连接失败")
+        st.error(str(e))
         return pd.DataFrame()
 
 # =========================
@@ -38,13 +32,13 @@ def safe_call(func, **kwargs):
 # =========================
 @st.cache_data
 def get_stock_pool():
-    df = safe_call(pro.stock_basic, exchange='', list_status='L')
+    df = test_connection()
 
     if df.empty:
         return []
 
-    # 去ST + 去空值
-    df = df[~df['name'].str.contains('ST', na=False)]
+    if 'name' in df.columns:
+        df = df[~df['name'].str.contains('ST', na=False)]
 
     return df['ts_code'].tolist()
 
@@ -52,60 +46,54 @@ def get_stock_pool():
 # 📈 行情数据
 # =========================
 def get_daily(ts_code):
-    df = safe_call(pro.daily, ts_code=ts_code, limit=60)
-    return df
-
-# =========================
-# 🧠 简单选股因子模型
-# =========================
-def score_stock(df):
-    if df.empty or len(df) < 20:
-        return None
-
     try:
-        close = df['close']
-        ret = close.iloc[-1] / close.iloc[0] - 1
+        df = pro.daily(ts_code=ts_code, limit=30)
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        st.write(f"{ts_code} error:", e)
+        return pd.DataFrame()
 
-        vol = df['vol'].mean()
-
-        score = ret * 100 / (vol + 1)
-
-        return score
+# =========================
+# 🧠 简单评分
+# =========================
+def score(df):
+    if df is None or df.empty or len(df) < 10:
+        return None
+    try:
+        return df['close'].iloc[-1] / df['close'].iloc[0] - 1
     except:
         return None
 
 # =========================
 # 🚀 主程序
 # =========================
-if st.button("🚀 开始A股选股（稳定版）"):
+if st.button("🚀 开始诊断+选股"):
 
     pool = get_stock_pool()
 
+    st.write("股票池数量 =", len(pool))
+
     if len(pool) == 0:
-        st.error("股票池为空：请检查Tushare权限或token")
+        st.error("❌ 股票池为空：不是代码问题，是Tushare没返回数据")
         st.stop()
 
-    result = []
-
+    results = []
     progress = st.progress(0)
 
-    for i, code in enumerate(pool[:200]):  # 🔥 限制200只防止崩溃
-
+    for i, code in enumerate(pool[:100]):  # 先测100只
         df = get_daily(code)
-        score = score_stock(df)
+        s = score(df)
 
-        if score is not None:
-            result.append((code, score))
+        if s is not None:
+            results.append((code, s))
 
-        progress.progress((i + 1) / min(len(pool), 200))
+        progress.progress((i + 1) / 100)
 
-    if len(result) == 0:
-        st.error("无有效数据（API可能限流）")
+    if not results:
+        st.error("❌ 无有效行情数据（daily接口失败）")
         st.stop()
 
-    result = sorted(result, key=lambda x: x[1], reverse=True)
+    results = sorted(results, key=lambda x: x[1], reverse=True)
 
-    top = pd.DataFrame(result[:20], columns=["股票代码", "评分"])
-
-    st.subheader("🏆 Top20选股结果（稳定版）")
-    st.dataframe(top)
+    st.subheader("Top 20")
+    st.dataframe(pd.DataFrame(results[:20], columns=["code", "score"]))
